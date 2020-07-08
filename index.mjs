@@ -1,13 +1,18 @@
-import __dirname from './dirname';
+import __dirname from './dirname.js';
 import util from 'util';
 const {promisify} = util;
 import fs from 'fs';
-const asyncStat = promisify(fs.stat);
+//const asyncStat = promisify(fs.stat);
 const asyncReadFile = promisify(fs.readFile);
 import url from 'url';
 const {URL} = url;
 const dirHref = `file://${__dirname}/`;
 const overloadsHref = `${dirHref}overloads/`;
+
+/* eslint-disable no-console */
+
+import {pathToFileURL} from 'url';
+const baseURL = pathToFileURL(process.cwd()).href;
 
 // you can do any global mutation here
 // setup async_hooks etc.
@@ -17,7 +22,7 @@ console.error('initializing loader... (do setup here)');
 const grabPackage = async (url) => {
   try {
     return JSON.parse(
-      await asyncReadFile(new URL('./package.json', url)));
+      await asyncReadFile(new URL('./package.json', url ? url : baseURL)));
   } catch (e) {
     if (e.code !== 'ENOENT') {
       throw e;
@@ -33,21 +38,21 @@ const grabPackage = async (url) => {
 const skipPackageSearch = new Set(['fs']);
 const overloads = {
   __proto__: null,
-  fs() {
+  fs () {
     return new URL(
-      `./fs.mjs`,
+      './fs.mjs',
       overloadsHref
     ).href;
   },
-  foo({url: resolved}, pkg) {
+  foo ({url: resolved}, pkg) {
     if (pkg.version === '0.0.0') {
       return new URL(
-        `./foo@0.0.0.mjs`,
+        './foo@0.0.0.mjs',
         overloadsHref
       ).href;
     } if (pkg.version === '1.0.0') {
       return new URL(
-        `./foo@1.0.0.mjs`,
+        './foo@1.0.0.mjs',
         overloadsHref
       ).href;
     } else {
@@ -55,27 +60,30 @@ const overloads = {
     }
   }
 }
-export async function resolve(specifier, parentModuleURL, defaultResolver) {
-  if (
-    new URL(parentModuleURL).href.indexOf(overloadsHref) == 0) {
-    return defaultResolver(specifier, parentModuleURL);
+export async function resolve (specifier, context, defaultResolver) {
+  //console.log(`specifier: ${specifier}`, context);
+  const {parentURL = null} = context;
+  const url = parentURL || baseURL;
+  if (new URL(url).href.indexOf(overloadsHref) == 0) {
+    return defaultResolver(specifier, url);
   }
   try {
     const overload = overloads[specifier];
     if (overload) {
       if (skipPackageSearch.has(specifier)) {
-        return defaultResolver(overload(), parentModuleURL);
+        return {url: parentURL ? new URL(overload(), parentURL).href : new URL(overload()).href};
       } else {
         const resolved = await defaultResolver(
           specifier,
-          parentModuleURL
+          context,
+          parentURL
         );
         const pkg = await grabPackage(resolved.url);
-        return defaultResolver(overload(resolved, pkg), parentModuleURL);
+        return {url: overload(resolved, pkg), parentURL};
       }
     }
   } catch (e) {
     console.trace(e);
   }
-  return defaultResolver(specifier, parentModuleURL);
+  return defaultResolver(specifier, context, parentURL);
 }
